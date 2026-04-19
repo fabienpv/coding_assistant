@@ -3,13 +3,13 @@ import json
 import os
 import cryptography.fernet
 from openai import OpenAI
-import pynvml
 
 from src import prompts
 import src.params as _params_
+from src.models import get_model_client, prepare_image
+
 
 from typing import Any, Generator
-
 
 
 class SecureChatHistory:
@@ -33,7 +33,6 @@ class SecureChatHistory:
                 with open(self.file_path, 'rb') as f_:
                     encrypted_data = f_.read()
                     decrypted_content = self.key.decrypt(encrypted_data)
-                    print("decrypted_content", decrypted_content)
                     if decrypted_content:
                         self.__history = json.loads(decrypted_content.decode('utf-8'))
                     else:
@@ -105,20 +104,9 @@ def get_chat_history():
     return chat_history
 
 
-model_client = None
-
-
-def get_model_client():
-    global model_client
-    if model_client is None:
-        model_client = OpenAI(base_url=_params_.LLAMA_SERVER_URL, api_key="not-needed")
-    return model_client
-
-
 class ChatBot:
     def __init__(self, conversation_name: str = ""):
-        self.__client = get_model_client()
-        self.__model = _params_.MODEL
+        self.__model_server = get_model_client()
         self.__conversation_name = None
         self.__conversation = None
         self.__chat_history = get_chat_history()
@@ -133,44 +121,84 @@ class ChatBot:
     
     def get_response_stream(
             self, 
-            query: str, 
-            max_tokens: int,
-            params: dict[str, Any]
+            query: str,
+            max_reasoning_tokens: int,
+            max_response_tokens: int,
+            params: dict[str, Any],
+            image: list[str] | str = None
         ) -> Generator[str, None, None]:
         """
         Generator that yields text word-by-word from the streaming response.
         """
-        message = {'role': 'user', 'content': query}
+        if type(image) is str:
+            image = [image]
 
+        # 1 - first message template with user query
+        message = {
+            "role": "user",
+            "content": [{"type": "text", "text": query}]
+        }
+        
+        # 2 - add images if any passed in
+        if type(image) is list:
+            message["content"] += [prepare_image(img_path) for img_path in image]
+
+        # 3 - convert into a list, the format taken by completion()
+        message = [message]
+
+        # 4 - add system prompt to verify if response if fully generated (reasoning_mode)
+        if max_reasoning_tokens:
+            system_prompt = """Add <|end|> at the end of the generated answer."""
+            message = [{
+                "role": "system",
+                "content": [{"type": "text", "text": system_prompt}]
+            }] + message
+   
         if not self.__conversation_name or not type(self.__conversation) is list:
             self.__conversation_name = self.conversation_naming(query)
             self.__chat_history[self.__conversation_name] = []
             self.__conversation = self.__chat_history[self.__conversation_name]
 
-        # self.__chat_history.add_message(self.__conversation_name, message)
-        self.__conversation.append(message)
-            
-        try:
-            response = self.__client.chat.completions.create(
-                model=self.__model,
-                max_tokens=max_tokens,
-                messages=[message],
-                stream=True,
-                **params
+        # images are not saved
+        self.__conversation.append({"role": "user", "content": query})
+    
+        if max_reasoning_tokens:
+            response: dict[str, str] = self.__model_server.completion(
+                messages=message,
+                max_tokens=max_reasoning_tokens,
+                gen_params=params,
+                keep_reasoning=True
             )
-            full_response = ""
-            for chunk in response:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    text_chunk = chunk.choices[0].delta.content
-                    full_response += text_chunk
-            print("FULL RESPONSE:", full_response)
-            return full_response
-                    # Note: Splitting by whitespace might break some markdown. Splitlines instead.
-                    # for sentence in full_response.splitlines():
-                    #     yield sentence
-        except Exception as e:
-            # yield f"[Error: {str(e)}]"
-            return f"[Error: {str(e)}]"
+            if not response["content"] or not "<|end|>" in response["content"]:
+                system_prompt = """Add <|end|> at the end of the generated answer."""
+                new_query = prompts.ANSWER_AFTER_REASONING.replace(
+                    "$PLACEHOLDER1$", query
+                ).replace(
+                    "$PLACEHOLDER2$", response["reasoning"]
+                )
+                new_message = {
+                    "role": "user",
+                    "content": [{"type": "text", "text": new_query}]
+                }
+                if type(image) is list:
+                    new_message["content"] += [prepare_image(img_path) for img_path in image]
+                new_message = []
+                final_response: str = self.__model_server.completion(
+                    messages=new_message,
+                    max_tokens=max_response_tokens,
+                    gen_params=_params_.MODE_PARAMS["complex_instruct"],
+                    keep_reasoning=False
+                )
+                response = {"reasoning": response["reasoning"], "response": final_response}
+        
+        else:
+            response: dict[str, str] = self.__model_server.completion(
+                messages=message,
+                max_tokens=max_response_tokens,
+                gen_params=params,
+                keep_reasoning=True
+            )
+        return response
 
     def add_assistant_message(self, ai_response: str):
         if type(self.__conversation) is list and len(self.__conversation) > 0:
@@ -181,32 +209,14 @@ class ChatBot:
             )
 
     def conversation_naming(self, query: str) -> str:
-        params = _params_.QWEN35_PARAMS["general_instruct"]
-        summary_message = [
-            {
-                'role': 'system',
-                'content': [{
-                    'type': 'text',
-                    'text': 'Your role is to return a short summary. No thinking. No reasoning.'
-                }]
-            },
-            {
-                'role': 'user', 
-                'content': [{
-                    'type': 'text',
-                    'text': prompts.CONVERSATION_NAMING.replace("$PLACEHOLDER$", query)
-                }]
-            }
-        ]
-        response = self.__client.chat.completions.create(
-                model=self.__model,
+        response = self.__model_server(
+                prompt=prompts.CONVERSATION_NAMING.replace("$PLACEHOLDER$", query),
                 max_tokens=36,
-                messages=summary_message,
-                stream=False,
-                **params
+                system_prompt='Your role is to return a short summary. No thinking. No reasoning.',
+                gen_params=_params_.MODE_PARAMS["general_instruct"]
             )
-        print("summary conv naming: ", response)
-        return response.choices[0].message.content
+        print("conversation_naming response:", response)
+        return response[0]
     
     @property
     def conversation(self) -> list[dict[str, str]]:

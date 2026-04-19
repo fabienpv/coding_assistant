@@ -12,13 +12,23 @@
     *   Standard parameters (`temperature`, `top_p`, `top_k`, `presence_penalty`) are mapped directly.
     *   Custom parameters (`min_p`, `enable_thinking`) are passed via `**kwargs`. *Note: `enable_thinking` and `min_p` are not standard OpenAI API parameters. They rely on the specific `llama-cpp` server implementation exposing them.*
 7.  **Security**: Uses Fernet encryption for the JSON file. A warning is included about key management.
+8.  **Hardware Monitoring** the interface provides a overview of the hardware monitoring: VRAM, RAM, % GPU, % CPU, temperature of GPU.
+
+
+### Data:
+
+- markdowns: OCR outputs saved locally
+- samples: a place where to store outputs when I test features
+- spelling: contains the documents for spelling correction post OCR
+- temp: contains the loaded documents during the session
+- temp_img: contains the loaded and processed images during the session
 
 ### Prerequisites
 
 You will need to install the following Python packages:
 
 ```bash
-pip install streamlit openai cryptography
+pip install -r requirements.txt
 ```
 
 **Local Server Setup:**
@@ -31,12 +41,12 @@ llama-cpp-python --server-port 8000 --server-name 0.0.0.0 --model your_model.ggu
 
 ### How to Run
 
-1.  Save the code to a file named `app.py`.
-2.  Run the Streamlit app:
+1.  Run the Streamlit app:
     ```bash
-    streamlit run app.py
+    python -m streamlit run ./src/gui.py
     ```
-3.  Open the link provided in your browser (usually `http://localhost:8501`).
+2.  Open the link provided in your browser (usually `http://localhost:8501`).
 
 ### Security Note
+
 For this demo, the encryption key is generated once and stored in the environment. In a production environment, you should retrieve this key from a secure secrets manager (e.g., AWS Secrets Manager, Kubernetes Secrets) or a dedicated `.env` file that is not committed to version control. The `chat_history.json` file will be encrypted, but the key must be secure to prevent unauthorized decryption.

@@ -1,0 +1,6 @@
+# abbreviation example
+{
+    "FFP": {
+        "pattern": "[Ff]irm [Ff]ixed [Pp]rices",
+        "description": "Firm Fixed Prices"
+}

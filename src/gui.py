@@ -1,21 +1,18 @@
 import streamlit as st
 import time
-import pynvml
-import threading
 
 from src.utils import ChatBot, get_chat_history
-from src.gui_utils import get_window_width, infer_height
+from src.gui_utils import get_window_width, infer_height, hardware_monitoring
 from src import params
 
 
 st.set_page_config(page_title="Local Llama Chatbot", layout="wide")
 
-# Check if pynvml is properly installed and GPU is available
-pynvml.nvmlInit()
-device_count = pynvml.nvmlDeviceGetCount()
 
+# =======================================================================================
+#                                        STYLES
+# =======================================================================================
 
-ss = st.session_state
 
 st.markdown("""
 <style>
@@ -25,9 +22,19 @@ st.markdown("""
         padding-left: 5rem;
         padding-right: 5rem;
     }
+    [data-testid="stMetricValue"] {
+        font-size: 16px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
+
+# =======================================================================================
+#                                        SESSION STATS
+# =======================================================================================
+
+
+ss = st.session_state
 
 # Initialize Session State for History and UI
 
@@ -41,8 +48,14 @@ if 'list_conversations' not in ss:
 if "model_params" not in ss:
     ss.model_params = None
 
-if "max_tokens" not in ss:
-    ss.max_tokens = 512
+if "reasoning_tokens" not in ss:
+    ss.reasoning_tokens = 512
+
+if "response_tokens" not in ss:
+    ss.response_tokens = 512
+
+if "model_mode" not in ss:
+    ss.model_mode = None
 
 if "rerun_counter" not in ss:
     ss.rerun_counter = 0
@@ -57,6 +70,10 @@ if "gpu_info" not in ss:
     ss.gpu_info = {}
 
 
+# =======================================================================================
+#                                        SIDEBAR
+# =======================================================================================
+
 
 # Sidebar for Configuration
 with st.sidebar:
@@ -64,19 +81,29 @@ with st.sidebar:
 
     model_mode = st.selectbox(
         "Select a mode",
-        options=list(params.QWEN35_PARAMS.keys()),
+        options=list(params.MODE_PARAMS.keys()),
         index=0,
         key="select_model_mode"
     )
-    ss.model_params = params.QWEN35_PARAMS[model_mode]
-    ss.max_tokens = params.QWEN35_DEFAULT_MAX_TOKENS[model_mode]
+    if model_mode != ss.model_mode:
+        ss.model_params = params.MODE_PARAMS[model_mode]
+        ss.reasoning_tokens = params.DEFAULT_MAX_TOKENS[model_mode]["reasoning"]
+        ss.response_tokens = params.DEFAULT_MAX_TOKENS[model_mode]["response"]
+        ss.model_mode = model_mode
+        st.rerun()
 
-    max_tokens_options = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
-    ss.max_tokens = st.selectbox(
-        "max_tokens:",
+    max_tokens_options = [0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
+    ss.reasoning_tokens = st.selectbox(
+        "max tokens for REASONING:",
         options=max_tokens_options,
-        index=max_tokens_options.index(ss.max_tokens),
-        key="select_max_tokens"
+        index=max_tokens_options.index(ss.reasoning_tokens),
+        key="select_max_reasoning_tokens"
+    )
+    ss.response_tokens = st.selectbox(
+        "max tokens for RESPONSE:",
+        options=max_tokens_options[1:],
+        index=max_tokens_options.index(ss.response_tokens),
+        key="select_max_response_tokens"
     )
 
     with st.expander("Generation parameters:"):
@@ -117,10 +144,12 @@ with st.sidebar:
         rerun_counter=ss.rerun_counter,
         sidebar=True
     )
+    
+    gpu_info = ss.gpu_info
+    hardware_monitoring(ss)
 
 
-
-cols = st.columns([3, 1])
+cols = st.columns([3, 2])
 
 with cols[0]:
     width_main = get_window_width(rerun_counter=ss.rerun_counter)
@@ -155,12 +184,17 @@ with cols[0]:
             # Stream Assistant Response
             with st.chat_message("assistant"):
                 st.markdown("") # Placeholder
+                reasoning_tokens = 0 if "reasoning" not in model_mode else ss.reasoning_tokens
                 streamer = ss.chat_session.get_response_stream(
                     query=prompt,
-                    max_tokens=ss.max_tokens,
+                    max_reasoning_tokens=reasoning_tokens,
+                    max_response_tokens=ss.response_tokens,
                     params=ss.model_params
                 )
                 print("streamer", streamer)
+                if type(streamer) is dict:
+                    response = streamer["response"]
+                    reasoning = streamer["reasoning"]
                 
                 full_text = ""
                 # empty = st.empty()
@@ -171,45 +205,11 @@ with cols[0]:
                 #         full_text += sentence + "\n" # Restore linebreak
                 #         # empty.markdown(full_text)
                 #         # time.sleep(0.05) # Small delay for visual effect
-                    st.markdown(streamer)
+                    st.markdown(response)
                 # Add assistant message to History
-                ss.chat_session.add_assistant_message(streamer.strip())
+                ss.chat_session.add_assistant_message(response.strip())
 
 
 with cols[1]:
-
-    gpu_info = ss.gpu_info
-
-    if not ss.pynvml_placeholder:
-        ss.pynvml_placeholder = st.empty()
-        
-        def monitor_gpu():
-            global gpu_info
-
-            while True:
-                for i in range(device_count):
-                    h = pynvml.nvmlDeviceGetHandleByIndex(i)
-                    gpu_info.update({
-                        "name": pynvml.nvmlDeviceGetName(h),
-                        "GPU": pynvml.nvmlDeviceGetUtilizationRates(h).gpu,
-                        "Memory": pynvml.nvmlDeviceGetMemoryInfo(h).used // (1024 * 1024),
-                        "Temp.": pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU),
-                        "Clock": pynvml.nvmlDeviceGetClockInfo(h, pynvml.NVML_CLOCK_GRAPHICS)
-                    })
-                print(gpu_info)
-                time.sleep(1)
-        threading.Thread(target=monitor_gpu, daemon=True).start()
-
-    with ss.pynvml_placeholder.container():
-        @st.fragment(run_every=1)
-        def update_metrics():
-            for k, v in gpu_info.items():
-                if k == 'GPU':
-                    st.metric(k, f"{v} %")
-                if k == 'Memory':
-                    st.metric(k, f"{v} MB")
-                if k == 'Temp.':
-                    st.metric(k, f"{v} °C")
-                if k == 'Clock':
-                    st.metric(k, f"{v} MHz")
-        update_metrics()
+    pass
+    
