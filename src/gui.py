@@ -66,6 +66,9 @@ if "chat_container_height" not in ss:
 if "pynvml_placeholder" not in ss:
     ss.pynvml_placeholder = None
 
+if "reasoning" not in ss:
+    ss.reasoning = None
+
 if "gpu_info" not in ss:
     ss.gpu_info = {}
 
@@ -89,8 +92,9 @@ with st.sidebar:
         ss.model_params = params.MODE_PARAMS[model_mode]
         ss.reasoning_tokens = params.DEFAULT_MAX_TOKENS[model_mode]["reasoning"]
         ss.response_tokens = params.DEFAULT_MAX_TOKENS[model_mode]["response"]
+        ss["select_max_reasoning_tokens"] = ss.reasoning_tokens
+        ss["select_max_response_tokens"] = ss.response_tokens
         ss.model_mode = model_mode
-        st.rerun()
 
     max_tokens_options = [0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
     ss.reasoning_tokens = st.selectbox(
@@ -102,7 +106,7 @@ with st.sidebar:
     ss.response_tokens = st.selectbox(
         "max tokens for RESPONSE:",
         options=max_tokens_options[1:],
-        index=max_tokens_options.index(ss.response_tokens),
+        index=max_tokens_options[1:].index(ss.response_tokens),
         key="select_max_response_tokens"
     )
 
@@ -145,15 +149,16 @@ with st.sidebar:
         sidebar=True
     )
     
-    gpu_info = ss.gpu_info
     hardware_monitoring(ss)
 
 
 cols = st.columns([3, 2])
 
+
+width_main = get_window_width(rerun_counter=ss.rerun_counter)
+height = infer_height(width=width_main, width_sidebar=width_sidebar)
+
 with cols[0]:
-    width_main = get_window_width(rerun_counter=ss.rerun_counter)
-    height = infer_height(width=width_main, width_sidebar=width_sidebar)
     if height:
         ss.chat_container_height = height
     else:
@@ -194,7 +199,9 @@ with cols[0]:
                 print("streamer", streamer)
                 if type(streamer) is dict:
                     response = streamer["response"]
-                    reasoning = streamer["reasoning"]
+                    ss.reasoning = streamer["reasoning"]
+                else:
+                    ss.reasoning = ""
                 
                 full_text = ""
                 # empty = st.empty()
@@ -211,5 +218,7 @@ with cols[0]:
 
 
 with cols[1]:
-    pass
-    
+    reasoning_container = st.container(height=height)
+    if ss.reasoning:
+        with reasoning_container:
+            st.markdown(ss.reasoning)

@@ -7,7 +7,7 @@ from src.paths import LLAMA_SERVER_URL, QWEN35_9B, QWEN36_35B, GEMMA4_26B
 
 import warnings
 
-VERBOSE = False
+VERBOSE = True
 
 os.environ["LLAMA_LOG_DISABLE"] = "1"
 

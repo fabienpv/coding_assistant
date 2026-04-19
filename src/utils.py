@@ -13,7 +13,7 @@ from typing import Any, Generator
 
 
 class SecureChatHistory:
-    def __init__(self, file_path="chat_history.json"):
+    def __init__(self, file_path="chat_history.txt"):
         self.file_path = file_path
         self.key = cryptography.fernet.Fernet(os.environ.get('FERNET_KEY').encode('ascii'))
         self.__history = {}
@@ -169,7 +169,7 @@ class ChatBot:
                 gen_params=params,
                 keep_reasoning=True
             )
-            if not response["content"] or not "<|end|>" in response["content"]:
+            if not response["response"] or not "<|end|>" in response["response"]:
                 system_prompt = """Add <|end|> at the end of the generated answer."""
                 new_query = prompts.ANSWER_AFTER_REASONING.replace(
                     "$PLACEHOLDER1$", query
@@ -182,7 +182,7 @@ class ChatBot:
                 }
                 if type(image) is list:
                     new_message["content"] += [prepare_image(img_path) for img_path in image]
-                new_message = []
+                new_message = [new_message]
                 final_response: str = self.__model_server.completion(
                     messages=new_message,
                     max_tokens=max_response_tokens,
@@ -210,11 +210,11 @@ class ChatBot:
 
     def conversation_naming(self, query: str) -> str:
         response = self.__model_server(
-                prompt=prompts.CONVERSATION_NAMING.replace("$PLACEHOLDER$", query),
-                max_tokens=36,
-                system_prompt='Your role is to return a short summary. No thinking. No reasoning.',
-                gen_params=_params_.MODE_PARAMS["general_instruct"]
-            )
+            prompt=prompts.CONVERSATION_NAMING.replace("$PLACEHOLDER$", query),
+            max_tokens=36,
+            system_prompt='Your role is to return a short summary and nothing else. Be concise.',
+            gen_params=_params_.MODE_PARAMS["general_instruct"]
+        )
         print("conversation_naming response:", response)
         return response[0]
     
